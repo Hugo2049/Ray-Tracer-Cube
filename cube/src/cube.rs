@@ -45,17 +45,28 @@ impl RayIntersect for Cube {
         let local_point = point - self.center;
         let abs_local = Vector3::new(local_point.x.abs(), local_point.y.abs(), local_point.z.abs());
         
-        let normal = if abs_local.x > abs_local.y && abs_local.x > abs_local.z {
+        let (normal, u, v) = if abs_local.x > abs_local.y && abs_local.x > abs_local.z {
             // Hit X face
-            if local_point.x > 0.0 { Vector3::new(1.0, 0.0, 0.0) } else { Vector3::new(-1.0, 0.0, 0.0) }
+            let normal = if local_point.x > 0.0 { Vector3::new(1.0, 0.0, 0.0) } else { Vector3::new(-1.0, 0.0, 0.0) };
+            let u = (local_point.y + half_size) / self.size;
+            let v = (local_point.z + half_size) / self.size;
+            (normal, u, v)
         } else if abs_local.y > abs_local.z {
             // Hit Y face
-            if local_point.y > 0.0 { Vector3::new(0.0, 1.0, 0.0) } else { Vector3::new(0.0, -1.0, 0.0) }
+            let normal = if local_point.y > 0.0 { Vector3::new(0.0, 1.0, 0.0) } else { Vector3::new(0.0, -1.0, 0.0) };
+            let u = (local_point.x + half_size) / self.size;
+            let v = (local_point.z + half_size) / self.size;
+            (normal, u, v)
         } else {
             // Hit Z face
-            if local_point.z > 0.0 { Vector3::new(0.0, 0.0, 1.0) } else { Vector3::new(0.0, 0.0, -1.0) }
+            let normal = if local_point.z > 0.0 { Vector3::new(0.0, 0.0, 1.0) } else { Vector3::new(0.0, 0.0, -1.0) };
+            let u = (local_point.x + half_size) / self.size;
+            let v = (local_point.y + half_size) / self.size;
+            (normal, u, v)
         };
         
-        Intersect::new(point, normal, t, self.material)
+        let mut intersect = Intersect::new(point, normal, t, self.material);
+        intersect.uv = Some((u, v));
+        intersect
     }
 }

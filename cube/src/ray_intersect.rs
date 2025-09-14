@@ -9,6 +9,7 @@ pub struct Intersect {
     pub distance: f32,
     pub is_intersecting: bool,
     pub material: Material,
+    pub uv: Option<(f32, f32)>,
 }
 
 impl Intersect {
@@ -19,6 +20,7 @@ impl Intersect {
             distance,
             is_intersecting: true,
             material,
+            uv: None,
         }
     }
 
@@ -29,6 +31,7 @@ impl Intersect {
             distance: 0.0,
             is_intersecting: false,
             material: Material::black(),
+            uv: None,
         }
     }
 }

@@ -7,6 +7,7 @@ mod cube;
 mod camera;
 mod light;
 mod material;
+mod texture; // Added texture module
 
 use framebuffer::Framebuffer;
 use ray_intersect::{Intersect, RayIntersect};
@@ -14,6 +15,7 @@ use cube::Cube;
 use camera::Camera;
 use light::Light;
 use material::{Material, vector3_to_color};
+use texture::Texture; // Added Texture import
 
 const ORIGIN_BIAS: f32 = 1e-4;
 
@@ -56,43 +58,24 @@ fn reflect(incident: &Vector3, normal: &Vector3) -> Vector3 {
 }
 
 fn refract(incident: &Vector3, normal: &Vector3, refractive_index: f32) -> Option<Vector3> {
-    // Implementation of Snell's Law for refraction.
-    // It calculates the direction of a ray as it passes from one medium to another.
-
-    // `cosi` is the cosine of the angle between the incident ray and the normal.
-    // We clamp it to the [-1, 1] range to avoid floating point errors.
     let mut cosi = incident.dot(*normal).max(-1.0).min(1.0);
-
-    // `etai` is the refractive index of the medium the ray is currently in.
-    // `etat` is the refractive index of the medium the ray is entering.
-    // `n` is the normal vector, which may be flipped depending on the ray's direction.
-    let mut etai = 1.0; // Assume we are in Air (or vacuum) initially
+    let mut etai = 1.0;
     let mut etat = refractive_index;
     let mut n = *normal;
 
     if cosi > 0.0 {
-        // The ray is inside the medium (e.g., glass) and going out into the air.
-        // We need to swap the refractive indices.
         std::mem::swap(&mut etai, &mut etat);
-        // We also flip the normal so it points away from the medium.
         n = -n;
     } else {
-        // The ray is outside the medium and going in.
-        // We need a positive cosine for the calculation, so we negate it.
         cosi = -cosi;
     }
 
-    // `eta` is the ratio of the refractive indices (n1 / n2).
     let eta = etai / etat;
-    // `k` is a term derived from Snell's law that helps determine if total internal reflection occurs.
     let k = 1.0 - eta * eta * (1.0 - cosi * cosi);
 
     if k < 0.0 {
-        // If k is negative, it means total internal reflection has occurred.
-        // There is no refracted ray, so we return None.
         None
     } else {
-        // If k is non-negative, we can calculate the direction of the refracted ray.
         Some(*incident * eta + n * (eta * cosi - k.sqrt()))
     }
 }
@@ -110,11 +93,11 @@ fn cast_shadow(
     for object in objects {
         let shadow_intersect = object.ray_intersect(&shadow_ray_origin, &light_dir);
         if shadow_intersect.is_intersecting && shadow_intersect.distance < light_distance {
-            return 1.0; // Hit something, full shadow
+            return 1.0;
         }
     }
 
-    0.0 // No shadow
+    0.0
 }
 
 pub fn cast_ray(
@@ -126,7 +109,6 @@ pub fn cast_ray(
 ) -> Vector3 {
     if depth > 3 {
         return procedural_sky(*ray_direction);
-        // return SKYBOX_COLOR;
     }
 
     let mut intersect = Intersect::empty();
@@ -142,8 +124,14 @@ pub fn cast_ray(
 
     if !intersect.is_intersecting {
         return procedural_sky(*ray_direction);
-        // return SKYBOX_COLOR;
     }
+
+    // Get diffuse color from texture if available
+    let diffuse_color = if let Some((u, v)) = intersect.uv {
+        intersect.material.get_diffuse_color(u, v)
+    } else {
+        intersect.material.diffuse
+    };
 
     let light_dir = (light.position - intersect.point).normalized();
     let view_dir = (*ray_origin - intersect.point).normalized();
@@ -153,7 +141,7 @@ pub fn cast_ray(
     let light_intensity = light.intensity * (1.0 - shadow_intensity);
 
     let diffuse_intensity = intersect.normal.dot(light_dir).max(0.0) * light_intensity;
-    let diffuse = intersect.material.diffuse * diffuse_intensity;
+    let diffuse = diffuse_color * diffuse_intensity;
 
     let specular_intensity = view_dir.dot(reflect_dir).max(0.0).powf(intersect.material.specular) * light_intensity;
     let light_color_v3 = Vector3::new(light.color.r as f32 / 255.0, light.color.g as f32 / 255.0, light.color.b as f32 / 255.0);
@@ -175,24 +163,18 @@ pub fn cast_ray(
     // Refractions
     let transparency = intersect.material.albedo[3];
     let refract_color = if transparency > 0.0 {
-        // Calculate the refracted ray direction. This can fail (return None) in case of total internal reflection.
         if let Some(refract_dir) = refract(ray_direction, &intersect.normal, intersect.material.refractive_index) {
-            // If refraction is possible, cast a new ray.
             let refract_origin = offset_origin(&intersect, &refract_dir);
             cast_ray(&refract_origin, &refract_dir, objects, light, depth + 1)
         } else {
-            // Total internal reflection occurred. In this case, the light is perfectly reflected.
-            // We cast a reflection ray instead of a refraction ray.
             let reflect_dir = reflect(ray_direction, &intersect.normal).normalized();
             let reflect_origin = offset_origin(&intersect, &reflect_dir);
             cast_ray(&reflect_origin, &reflect_dir, objects, light, depth + 1)
         }
     } else {
-        // If the material is not transparent, the refracted color is black.
         Vector3::zero()
     };
 
-    // Combine the Phong color with the reflected and refracted colors using the material's albedo values.
     phong_color * (1.0 - reflectivity - transparency) + reflect_color * reflectivity + refract_color * transparency
 }
 
@@ -236,17 +218,30 @@ fn main() {
 
     let mut framebuffer = Framebuffer::new(window_width as u32, window_height as u32);
 
-    // Red material for the cube
-    let red_material = Material::new(
-        Vector3::new(0.8, 0.1, 0.1), // Bright red diffuse color
+    // Load texture
+    let texture = match Texture::load_from_file("texture.png") {
+        Ok(tex) => Some(tex),
+        Err(e) => {
+            println!("Failed to load texture: {}", e);
+            None
+        }
+    };
+
+    // Create material with texture
+    let mut cube_material = Material::new(
+        Vector3::new(0.8, 0.1, 0.1), // Default color if texture fails
         50.0,
-        [0.7, 0.3, 0.0, 0.0], // Mostly diffuse with some specular
+        [0.7, 0.3, 0.0, 0.0],
         0.0,
     );
 
-    // Create a single red cube at the center
+    if let Some(tex) = texture {
+        cube_material = cube_material.with_texture(tex);
+    }
+
+    // Create a single cube at the center with texture
     let objects = [
-        Cube { center: Vector3::new(0.0, 0.0, 0.0), size: 2.0, material: red_material },
+        Cube { center: Vector3::new(0.0, 0.0, 0.0), size: 2.0, material: cube_material },
     ];
 
     let mut camera = Camera::new(
