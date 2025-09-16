@@ -7,7 +7,6 @@ mod cube;
 mod camera;
 mod light;
 mod material;
-mod texture; // Added texture module
 
 use framebuffer::Framebuffer;
 use ray_intersect::{Intersect, RayIntersect};
@@ -15,7 +14,6 @@ use cube::Cube;
 use camera::Camera;
 use light::Light;
 use material::{Material, vector3_to_color};
-use texture::Texture; // Added Texture import
 
 const ORIGIN_BIAS: f32 = 1e-4;
 
@@ -83,7 +81,7 @@ fn refract(incident: &Vector3, normal: &Vector3, refractive_index: f32) -> Optio
 fn cast_shadow(
     intersect: &Intersect,
     light: &Light,
-    objects: &[Cube],
+    objects: &mut [Cube],
 ) -> f32 {
     let light_dir = (light.position - intersect.point).normalized();
     let light_distance = (light.position - intersect.point).length();
@@ -103,7 +101,7 @@ fn cast_shadow(
 pub fn cast_ray(
     ray_origin: &Vector3,
     ray_direction: &Vector3,
-    objects: &[Cube],
+    objects: &mut [Cube],
     light: &Light,
     depth: u32,
 ) -> Vector3 {
@@ -114,7 +112,7 @@ pub fn cast_ray(
     let mut intersect = Intersect::empty();
     let mut zbuffer = f32::INFINITY;
 
-    for object in objects {
+    for object in objects.iter_mut() {
         let i = object.ray_intersect(ray_origin, ray_direction);
         if i.is_intersecting && i.distance < zbuffer {
             zbuffer = i.distance;
@@ -126,13 +124,6 @@ pub fn cast_ray(
         return procedural_sky(*ray_direction);
     }
 
-    // Get diffuse color from texture if available
-    let diffuse_color = if let Some((u, v)) = intersect.uv {
-        intersect.material.get_diffuse_color(u, v)
-    } else {
-        intersect.material.diffuse
-    };
-
     let light_dir = (light.position - intersect.point).normalized();
     let view_dir = (*ray_origin - intersect.point).normalized();
     let reflect_dir = reflect(&-light_dir, &intersect.normal).normalized();
@@ -141,7 +132,7 @@ pub fn cast_ray(
     let light_intensity = light.intensity * (1.0 - shadow_intensity);
 
     let diffuse_intensity = intersect.normal.dot(light_dir).max(0.0) * light_intensity;
-    let diffuse = diffuse_color * diffuse_intensity;
+    let diffuse = intersect.material.diffuse * diffuse_intensity;
 
     let specular_intensity = view_dir.dot(reflect_dir).max(0.0).powf(intersect.material.specular) * light_intensity;
     let light_color_v3 = Vector3::new(light.color.r as f32 / 255.0, light.color.g as f32 / 255.0, light.color.b as f32 / 255.0);
@@ -150,7 +141,6 @@ pub fn cast_ray(
     let albedo = intersect.material.albedo;
     let phong_color = diffuse * albedo[0] + specular * albedo[1];
 
-    // Reflections
     let reflectivity = intersect.material.albedo[2];
     let reflect_color = if reflectivity > 0.0 {
         let reflect_dir = reflect(ray_direction, &intersect.normal).normalized();
@@ -160,7 +150,6 @@ pub fn cast_ray(
         Vector3::zero()
     };
 
-    // Refractions
     let transparency = intersect.material.albedo[3];
     let refract_color = if transparency > 0.0 {
         if let Some(refract_dir) = refract(ray_direction, &intersect.normal, intersect.material.refractive_index) {
@@ -178,7 +167,7 @@ pub fn cast_ray(
     phong_color * (1.0 - reflectivity - transparency) + reflect_color * reflectivity + refract_color * transparency
 }
 
-pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, light: &Light) {
+pub fn render(framebuffer: &mut Framebuffer, objects: &mut [Cube], camera: &Camera, light: &Light) {
     let width = framebuffer.width as f32;
     let height = framebuffer.height as f32;
     let aspect_ratio = width / height;
@@ -212,37 +201,59 @@ fn main() {
  
     let (mut window, thread) = raylib::init()
         .size(window_width, window_height)
-        .title("Raytracer Example")
+        .title("Raytracer with Texture")
         .log_level(TraceLogLevel::LOG_WARNING)
         .build();
 
     let mut framebuffer = Framebuffer::new(window_width as u32, window_height as u32);
 
-    // Load texture
-    let texture = match Texture::load_from_file("texture.png") {
-        Ok(tex) => Some(tex),
-        Err(e) => {
-            println!("Failed to load texture: {}", e);
-            None
-        }
-    };
+    // Try to load texture from multiple possible paths
+    let texture_paths = [
+        "src/texture.png",
+        "texture.png",
+        "./src/texture.png",
+        "./texture.png"
+    ];
 
-    // Create material with texture
-    let mut cube_material = Material::new(
-        Vector3::new(0.8, 0.1, 0.1), // Default color if texture fails
-        50.0,
-        [0.7, 0.3, 0.0, 0.0],
+    let mut texture_image = None;
+    for path in &texture_paths {
+        match Image::load_image(path) {
+            Ok(image) => {
+                println!("Successfully loaded texture from: {}", path);
+                texture_image = Some(image);
+                break;
+            }
+            Err(e) => {
+                println!("Failed to load texture from {}: {:?}", path, e);
+            }
+        }
+    }
+
+    if texture_image.is_none() {
+        println!("Warning: Could not load texture from any path, using material color only");
+    }
+
+    // Create material that works well with textures
+    let cube_material = Material::new(
+        Vector3::new(1.0, 1.0, 1.0), // White base color so texture shows through
+        32.0,                        // Moderate specularity
+        [0.9, 0.1, 0.0, 0.0],       // Mostly diffuse lighting
         0.0,
     );
 
-    if let Some(tex) = texture {
-        cube_material = cube_material.with_texture(tex);
-    }
-
-    // Create a single cube at the center with texture
-    let objects = [
-        Cube { center: Vector3::new(0.0, 0.0, 0.0), size: 2.0, material: cube_material },
-    ];
+    // Create cube with or without texture
+    let mut objects = if let Some(texture) = texture_image {
+        vec![Cube::with_texture(Vector3::new(0.0, 0.0, 0.0), 2.0, cube_material, texture)]
+    } else {
+        // Fallback: create cube with a colorful material if no texture
+        let colorful_material = Material::new(
+            Vector3::new(0.8, 0.3, 0.2), // Orange-red color
+            32.0,
+            [0.7, 0.3, 0.0, 0.0],
+            0.0,
+        );
+        vec![Cube::new(Vector3::new(0.0, 0.0, 0.0), 2.0, colorful_material)]
+    };
 
     let mut camera = Camera::new(
         Vector3::new(0.0, 0.0, 5.0),
@@ -252,12 +263,17 @@ fn main() {
     let rotation_speed = PI / 100.0;
 
     let light = Light::new(
-        Vector3::new(1.0, -1.0, 5.0),
+        Vector3::new(2.0, 2.0, 5.0),
         Color::new(255, 255, 255, 255),
-        1.5,
+        1.2,
     );
 
+    println!("Controls:");
+    println!("- Arrow keys to rotate camera around the cube");
+    println!("- ESC to exit");
+
     while !window.window_should_close() {
+        // Handle camera controls
         if window.is_key_down(KeyboardKey::KEY_LEFT) {
             camera.orbit(rotation_speed, 0.0);
         }
@@ -271,8 +287,9 @@ fn main() {
             camera.orbit(0.0, rotation_speed);
         }
 
+        // Render the scene
         framebuffer.clear();
-        render(&mut framebuffer, &objects, &camera, &light);
+        render(&mut framebuffer, &mut objects, &camera, &light);
         framebuffer.swap_buffers(&mut window, &thread);
     }
 }

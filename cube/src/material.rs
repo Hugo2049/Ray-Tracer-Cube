@@ -1,13 +1,11 @@
 use raylib::prelude::{Color, Vector3};
-use crate::texture::Texture;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Material {
     pub diffuse: Vector3,
     pub albedo: [f32; 4],
     pub specular: f32,
     pub refractive_index: f32,
-    pub diffuse_texture: Option<Texture>,
 }
 
 impl Material {
@@ -17,13 +15,7 @@ impl Material {
             albedo,
             specular,
             refractive_index,
-            diffuse_texture: None,
         }
-    }
-
-    pub fn with_texture(mut self, texture: Texture) -> Self {
-        self.diffuse_texture = Some(texture);
-        self
     }
 
     pub fn black() -> Self {
@@ -32,15 +24,6 @@ impl Material {
             albedo: [0.0, 0.0, 0.0, 0.0],
             specular: 0.0,
             refractive_index: 0.0,
-            diffuse_texture: None,
-        }
-    }
-
-    pub fn get_diffuse_color(&self, u: f32, v: f32) -> Vector3 {
-        if let Some(texture) = &self.diffuse_texture {
-            texture.sample(u, v)
-        } else {
-            self.diffuse
         }
     }
 }
